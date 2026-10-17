@@ -4,7 +4,8 @@ COSC 3117 Assignment 1: Zombie outbreak, built from mesa_web_wealth.py.
 Part 1 rules
     One agent type, OutbreakAgent, with isZombie, shots_left = 15 and dead.
     10% of agents start as zombies (num_humans = 90, num_zombies = 10 by default).
-    All agents move randomly.
+    All agents move randomly. The grid has edges (torus = False), so an agent on an edge
+    or in a corner has fewer cells to move to. torus = True wraps the edges around.
     Each step has two phases. First every agent moves, then every agent interacts with
     the others in its new cell (shooting for humans, infecting for zombies), in random
     order. Shooting therefore happens for every human, however it moved.
@@ -21,14 +22,16 @@ Part 2 features
         immune (immunity_chance, by default 1 in N where N is the starting number of humans
         plus zombies like in Last of Us :) ). Once one human is immune no other human can be
         immune by chance, so a run has at most one natural immune human, or none. A zombie
-        cannot bite an immune human. Each step an immune human shares its immunity with every
+        cannot bite an immune human (unless feature 2 is on). Each step an immune human shares its immunity with every
         human within `immunity_radius` cells (its own cell included) who is not a zombie, and those
         humans then share it in the same way. immunity = False gives the plain Part 1
         behaviour.
-    FEATURE 2, immune humans can be killed: with immune_can_die = True a zombie that shares
-        a cell with an immune human who has no ammo left (shots_left = 0) kills that human
-        (dead = True, the human stays on the grid and counts in DeadHumans). Immune humans
-        who still have ammo cannot be killed. This only has an effect when immunity is on.
+    FEATURE 2, immune humans bleed out: with immune_can_die = True zombies can bite immune
+        humans. A bite does not turn an immune human, but each one counts as damage, and an
+        immune human who has been bitten `bites_to_die` times (5 by default) dies (dead = True,
+        the human stays on the grid and counts in DeadHumans). Ammo does not matter for this.
+        immune_can_die = False means zombies skip immune humans. This only has an effect when
+        immunity is on.
 
 Run
     solara run a1_abhai.py     web visualisation
@@ -43,6 +46,7 @@ import pandas as pd
 from mesa.visualization import SolaraViz, make_plot_component, make_space_component
 
 SHOTS_START = 15
+BITES_TO_DIE = 5  # feature 2: bites an immune human takes before it dies
 HIT_CHANCE = 0.5
 DROP_CHANCE = 0.5
 DROP_MAX = 3  # a zombie drops between 1 and DROP_MAX shots at a time
@@ -58,6 +62,7 @@ class OutbreakAgent(mesa.Agent):
         self.dead = False
         # Feature 1: an immune human cannot be bitten and can pass immunity on.
         self.immune = False
+        self.bites = 0  # feature 2: bites taken while immune
         # Step on which this agent was bitten, so it does not act twice in that step.
         self.turned_on = None
 
@@ -111,17 +116,15 @@ class OutbreakAgent(mesa.Agent):
         if not humans:
             return
 
-        # One action per step on one human chosen at random. Immune humans cannot be
-        # bitten (feature 1), but with feature 2 on an immune human with no ammo can be killed.
-        targets = [
-            a
-            for a in humans
-            if not a.immune or (self.model.immune_can_die and a.shots_left == 0)
-        ]
+        # One bite per step on one human chosen at random. Immune humans cannot be bitten
+        # (feature 1), unless feature 2 is on: then they take damage and die after enough bites.
+        targets = [a for a in humans if not a.immune or self.model.immune_can_die]
         if targets:
             victim = self.random.choice(targets)
             if victim.immune:
-                victim.dead = True
+                victim.bites += 1
+                if victim.bites >= self.model.bites_to_die:
+                    victim.dead = True
             else:
                 victim.turn()
 
@@ -173,7 +176,7 @@ def count_dead_humans(model):
 
 
 class OutbreakModel(mesa.Model):
-    """Outbreak on a torus grid. Several agents can share a cell."""
+    """Outbreak on a grid with edges (torus = True wraps them). Several agents can share a cell."""
 
     def __init__(
         self,
@@ -184,16 +187,19 @@ class OutbreakModel(mesa.Model):
         immunity=False,
         immune_can_die=False,
         shots_start=SHOTS_START,
+        bites_to_die=BITES_TO_DIE,
         immunity_radius=1,
         immunity_chance=None,
+        torus=False,
         seed=None,
     ):
         # The web form passes the seed as text once it has been edited.
         super().__init__(seed=int(seed) if seed not in (None, "") else None)
         self.immune_can_die = immune_can_die
         self.shots_start = shots_start
+        self.bites_to_die = bites_to_die
         self.immunity_radius = immunity_radius
-        self.grid = mesa.space.MultiGrid(width, height, True)
+        self.grid = mesa.space.MultiGrid(width, height, torus)
         self.datacollector = mesa.DataCollector(
             model_reporters={
                 "Humans": count_humans,
@@ -287,7 +293,15 @@ model_params = {
     "immune_can_die": {
         "type": "Checkbox",
         "value": False,
-        "label": "Zombies kill immune humans with no ammo",
+        "label": "Zombies can bite immune humans (they die after N bites)",
+    },
+    "bites_to_die": {
+        "type": "SliderInt",
+        "value": BITES_TO_DIE,
+        "label": "Bites an immune human survives:",
+        "min": 1,
+        "max": 10,
+        "step": 1,
     },
     "seed": {"type": "InputText", "value": 42, "label": "Random seed (same seed, same run)"},
 }
@@ -333,7 +347,7 @@ page
 
 CONFIGS = {
     f"{name}, {shots} shots": {"shots_start": shots, **settings}
-    for shots in (15, 2) # Starting shots per human. More humans are killed by zombie when shots are lesser
+    for shots in (15,)  # Starting shots per human. Add values to compare ammo levels.
     for name, settings in {
         "baseline": {"immunity": False, "immune_can_die": False},
         "immunity": {"immunity": True, "immune_can_die": False},
