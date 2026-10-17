@@ -1,0 +1,19 @@
+x-mesa: &mesa
+  build: .
+  image: a1-mesa:py3.13
+  volumes:
+    - .:/app
+
+services:
+  # Web visualisation: docker compose up web   (http://localhost:8765)
+  web:
+    <<: *mesa
+    command: solara run a1_abhai.py --host 0.0.0.0 --port 8765
+    ports:
+      - "8765:8765"
+
+  # Batch experiment: docker compose run --rm batch   (writes a1_results.csv here)
+  batch:
+    <<: *mesa
+    profiles: ["batch"]
+    command: python a1_abhai.py
